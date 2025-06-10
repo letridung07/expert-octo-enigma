@@ -94,20 +94,25 @@ class TextEditor:
 class FileExplorer:
     def __init__(self, master_frame, text_editor_instance, app_instance):
         self.frame = master_frame
-        self.text_editor = text_editor_instance
-        self.app = app_instance # To call update_title_and_status
+        self.text_editor = text_editor_instance # Note: This is actually app_instance for callbacks now
+        self.app = app_instance
+
+        self._load_icons() # Load icons first
 
         self.file_tree = ttk.Treeview(self.frame)
         self.file_tree.pack(expand=True, fill='both')
-        self.file_tree["columns"] = ("path",)
+        self.file_tree["columns"] = ("path", "type") # Added type for storing 'file'/'directory'
         self.file_tree.heading("#0", text="Name", anchor="w")
-        self.file_tree.column("#0", anchor="w")
-        self.file_tree.column("path", width=0, stretch=tk.NO) # Hide path column
-        self.current_path = os.getcwd() # Store current path for reference
+        self.file_tree.column("#0", anchor="w", width=180) # Adjusted width
+        self.file_tree.column("path", width=0, stretch=tk.NO)
+        self.file_tree.column("type", width=0, stretch=tk.NO) # Hidden type column
+        self.current_path = os.getcwd()
 
         self._create_context_menu()
-        self.populate_file_explorer(self.current_path)
+        # Initial population of the root level
+        self.populate_file_explorer("", self.current_path)
         self.file_tree.bind("<<TreeviewSelect>>", self._on_file_select)
+        self.file_tree.bind("<<TreeviewOpen>>", self._on_treeview_open) # For expanding directories
         self.file_tree.bind("<Button-3>", self._show_context_menu) # For Windows/Linux
 
     def _create_context_menu(self):
@@ -117,6 +122,8 @@ class FileExplorer:
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Rename", command=self._rename_item)
         self.context_menu.add_command(label="Delete", command=self._delete_item)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Refresh", command=self._refresh_explorer)
 
     def _show_context_menu(self, event):
         item_id = self.file_tree.identify_row(event.y)
@@ -135,32 +142,104 @@ class FileExplorer:
             self.context_menu.entryconfig("New Folder", state="normal")
             self.context_menu.entryconfig("Rename", state="disabled")
             self.context_menu.entryconfig("Delete", state="disabled")
+        self.context_menu.entryconfig("Refresh", state="normal") # Refresh is always enabled
 
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
-    def populate_file_explorer(self, path):
-        # Clear existing items first
-        for i in self.file_tree.get_children():
-            self.file_tree.delete(i)
-        # Populate with new items
-        self.current_path = path # Update current path being displayed
-        for item in os.listdir(path):
-            item_path = os.path.join(path, item)
-            # Determine if it's a directory to potentially use a different icon or handling
-            # For now, just text; could add self.file_tree.item(..., image=dir_icon) later
-            is_dir = os.path.isdir(item_path)
-            self.file_tree.insert('', 'end', text=item, values=[item_path], tags=('directory' if is_dir else 'file'))
-            # TODO: Add recursion for directories by inserting children into parent node
+    def _refresh_explorer(self):
+        # Clear all root items. TreeviewOpen handler will populate subdirectories upon expansion.
+        for item_id in self.file_tree.get_children(""): # Get children of root
+            self.file_tree.delete(item_id)
+        # Repopulate from the current_path at the root level
+        self.populate_file_explorer("", self.current_path)
+
+
+    def populate_file_explorer(self, parent_node_id, dir_path):
+        """Populates the treeview with items from dir_path under parent_node_id."""
+        try:
+            for item_name in sorted(os.listdir(dir_path)):
+                full_path = os.path.join(dir_path, item_name)
+                item_type = "directory" if os.path.isdir(full_path) else "file"
+
+                # Determine icon
+                icon_to_use = None
+                if item_type == "directory" and self.folder_icon:
+                    icon_to_use = self.folder_icon
+                elif item_type == "file" and self.file_icon:
+                    icon_to_use = self.file_icon
+
+                item_id = self.file_tree.insert(parent_node_id, 'end', text=item_name,
+                                                image=icon_to_use if icon_to_use else "", # Use icon if available
+                                                values=[full_path, item_type], open=False)
+
+                # If it's a directory, insert a placeholder to make it expandable
+                if item_type == "directory":
+                    # Check if directory is empty or not readable before adding placeholder
+                    try:
+                        if os.listdir(full_path): # If not empty
+                             self.file_tree.insert(item_id, 'end', text='...', values=['placeholder', 'placeholder'])
+                        # If empty, it will just be an expandable node with no children shown yet
+                    except OSError: # Permission error etc.
+                        self.file_tree.insert(item_id, 'end', text='[Error reading]', values=['error', 'error'])
+        except OSError as e:
+            # Error listing the initial dir_path (e.g. permission denied for dir_path itself)
+            # If parent_node_id is "", it's the root, display error there.
+            # Otherwise, could try to insert an error node under the parent.
+            error_node_parent = parent_node_id if parent_node_id else ""
+            self.file_tree.insert(error_node_parent, 'end', text=f"[Error: {os.path.basename(dir_path)}]",
+                                  values=[dir_path, "error"])
+            print(f"Error populating file explorer for {dir_path}: {e}")
+
+
+    def _on_treeview_open(self, event):
+        selected_node_id = self.file_tree.focus() # Get the node that is being opened
+        if not selected_node_id: return
+
+        children = self.file_tree.get_children(selected_node_id)
+        # If the first child is a placeholder, expand this directory
+        if children and self.file_tree.item(children[0])['values'][0] == 'placeholder':
+            self.file_tree.delete(children[0]) # Remove placeholder
+
+            dir_path_to_expand = self.file_tree.item(selected_node_id)['values'][0]
+            if os.path.isdir(dir_path_to_expand):
+                self.populate_file_explorer(selected_node_id, dir_path_to_expand)
+            else: # Should not happen if placeholder logic is correct
+                print(f"Error: Attempted to expand a non-directory: {dir_path_to_expand}")
+
+
+    def _load_icons(self):
+        # Using a minimal transparent GIF as placeholder if actual icons are not available
+        # R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 (1x1 transparent GIF)
+        b64_transparent_pixel = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+        try:
+            self.folder_icon = tk.PhotoImage(name="folder_icon_data", data=b64_transparent_pixel)
+            self.file_icon = tk.PhotoImage(name="file_icon_data", data=b64_transparent_pixel)
+            # In a real scenario, replace b64_transparent_pixel with actual base64 encoded icon data
+            # e.g., self.folder_icon = tk.PhotoImage(file="icons/folder.png")
+        except tk.TclError: # Fallback if PhotoImage fails (e.g., no display server like in some test environments)
+            self.folder_icon = None
+            self.file_icon = None
+            print("Warning: Could not load icons for File Explorer. Tkinter TclError.")
+        except Exception as e: # Catch any other error during icon loading
+            self.folder_icon = None
+            self.file_icon = None
+            print(f"Warning: An unexpected error occurred while loading icons: {e}")
+
 
     def _get_parent_dir_for_new_item(self):
-        selected_item = self.file_tree.selection()
-        if selected_item:
-            item_path = self.file_tree.item(selected_item[0])['values'][0]
-            if os.path.isdir(item_path):
-                return item_path
-            else: # A file is selected, use its directory
-                return os.path.dirname(item_path)
-        return self.current_path # Default to current root if nothing specific selected
+        selected_items = self.file_tree.selection() # Use selection() as it returns a tuple
+        if selected_items: # Check if the tuple is not empty
+            selected_item_id = selected_items[0]
+            # Ensure 'values' exist and has at least two items before accessing values[1]
+            item_details = self.file_tree.item(selected_item_id)
+            if item_details and 'values' in item_details and len(item_details['values']) > 1:
+                item_path = item_details['values'][0]
+                item_type = item_details['values'][1] # 'directory' or 'file'
+                if item_type == "directory":
+                    return item_path
+                else: # A file is selected, use its directory
+                    return os.path.dirname(item_path)
+        return self.current_path # Default to current root
 
     def _create_new_folder(self):
         parent_dir = self._get_parent_dir_for_new_item()
@@ -170,6 +249,7 @@ class FileExplorer:
                 full_path = os.path.join(parent_dir, foldername)
                 os.mkdir(full_path)
                 self.populate_file_explorer(self.current_path) # Refresh
+                if self.app: self.app.status_bar.update_status(f"Folder '{foldername}' created in {parent_dir}.")
             except FileExistsError:
                 messagebox.showerror("Error", f"Folder '{foldername}' already exists in {parent_dir}.", parent=self.frame)
             except OSError as e:
@@ -186,6 +266,7 @@ class FileExplorer:
                      return
                 open(full_path, 'w').close() # Create empty file
                 self.populate_file_explorer(self.current_path) # Refresh
+                if self.app: self.app.status_bar.update_status(f"File '{filename}' created in {parent_dir}.")
             except OSError as e:
                 messagebox.showerror("Error", f"Failed to create file: {e}", parent=self.frame)
 
@@ -210,6 +291,7 @@ class FileExplorer:
                 # Notify App to update any open tabs
                 if self.app:
                     self.app.handle_renamed_file(old_path, new_path)
+                    self.app.status_bar.update_status(f"Renamed '{old_name}' to '{new_name}'.")
             except OSError as e:
                 messagebox.showerror("Error", f"Failed to rename item: {e}", parent=self.frame)
 
@@ -235,6 +317,7 @@ class FileExplorer:
                 # Notify App to close any open tab for this file
                 if self.app:
                     self.app.handle_deleted_file(path_to_delete)
+                    self.app.status_bar.update_status(f"Deleted '{item_name}'.")
             except OSError as e:
                 messagebox.showerror("Error", f"Failed to delete item: {e}", parent=self.frame)
 
@@ -274,6 +357,9 @@ class App:
     def __init__(self):
         self.window = tk.Tk()
         self.window.title("Basic Text Editor - Refactored")
+
+        self.case_sensitive_var = tk.BooleanVar()
+        # self.regex_var = tk.BooleanVar() # For later
 
         # --- Main Content Frame ---
         # This frame will hold File Explorer (left) and TextEditor (right)
@@ -346,10 +432,30 @@ class App:
         self.find_next_button.pack(side=tk.LEFT, padx=2)
         self.find_prev_button = tk.Button(self.search_frame, text="Previous", command=self._find_previous, width=8)
         self.find_prev_button.pack(side=tk.LEFT, padx=2)
+
+        self.case_sensitive_check = tk.Checkbutton(
+            self.search_frame, text="Case Sensitive", variable=self.case_sensitive_var,
+            command=self._on_search_option_changed
+        )
+        self.case_sensitive_check.pack(side=tk.LEFT, padx=2)
+
+        # self.regex_check = tk.Checkbutton(self.search_frame, text="Regex", variable=self.regex_var, command=self._on_search_option_changed)
+        # self.regex_check.pack(side=tk.LEFT, padx=2) # For later
+
         self.close_search_button = tk.Button(self.search_frame, text="X", command=self._toggle_search_frame, width=3)
         self.close_search_button.pack(side=tk.LEFT, padx=(2,5))
 
         self.last_search_match_info = {'index': "1.0", 'query': ""}
+
+    def _on_search_option_changed(self):
+        # When a search option (like case sensitivity) changes, reset the last match info
+        # so the next search starts fresh.
+        self.last_search_match_info = {'index': "1.0", 'query': self.search_entry.get()}
+        # Optionally, could re-trigger find_next if query exists, but for now, just reset.
+        editor = self.get_current_editor()
+        if editor:
+            editor.clear_search_highlights()
+
 
     def _toggle_search_frame(self):
         if self.search_frame_visible:
@@ -384,7 +490,8 @@ class App:
         start_index = self.last_search_match_info.get('index', "1.0")
         editor.clear_search_highlights() # Clear previous before new search
 
-        match_start = editor.text_area.search(query, start_index, stopindex=tk.END, nocase=True)
+        nocase_flag = not self.case_sensitive_var.get()
+        match_start = editor.text_area.search(query, start_index, stopindex=tk.END, nocase=nocase_flag)
 
         if match_start:
             match_end = f"{match_start}+{len(query)}c" # 'c' for characters
@@ -394,16 +501,19 @@ class App:
             self.last_search_match_info = {'index': match_end, 'query': query}
         else: # Wrap around search
             self.status_bar.update_status(f"'{query}' not found. Wrapping around.")
-            match_start = editor.text_area.search(query, "1.0", stopindex=start_index, nocase=True)
+            match_start = editor.text_area.search(query, "1.0", stopindex=start_index, nocase=nocase_flag)
             if match_start:
                 match_end = f"{match_start}+{len(query)}c"
                 editor.text_area.tag_add("search_highlight", match_start, match_end)
                 editor.text_area.see(match_start)
                 editor.text_area.mark_set(tk.INSERT, match_end)
                 self.last_search_match_info = {'index': match_end, 'query': query}
+                self.status_bar.update_status(f"Wrapped around. Found: '{query}'")
             else:
                 self.status_bar.update_status(f"'{query}' not found.")
                 self.last_search_match_info = {'index': "1.0", 'query': query} # Reset for next time
+        else: # Initial search found something
+             self.status_bar.update_status(f"Found: '{query}'")
 
     def _find_previous(self, event=None): # Added event=None for binding
         editor = self.get_current_editor()
@@ -423,7 +533,8 @@ class App:
         start_index = self.last_search_match_info.get('index', editor.text_area.index(tk.INSERT))
         editor.clear_search_highlights()
 
-        match_start = editor.text_area.search(query, start_index, stopindex="1.0", backwards=True, nocase=True)
+        nocase_flag = not self.case_sensitive_var.get()
+        match_start = editor.text_area.search(query, start_index, stopindex="1.0", backwards=True, nocase=nocase_flag)
 
         if match_start:
             match_end = f"{match_start}+{len(query)}c"
@@ -433,17 +544,19 @@ class App:
             self.last_search_match_info = {'index': match_start, 'query': query}
         else: # Wrap around search (from end of doc to start_index)
             self.status_bar.update_status(f"'{query}' not found. Wrapping around (previous).")
-            match_start = editor.text_area.search(query, tk.END, stopindex=start_index, backwards=True, nocase=True)
+            match_start = editor.text_area.search(query, tk.END, stopindex=start_index, backwards=True, nocase=nocase_flag)
             if match_start:
                 match_end = f"{match_start}+{len(query)}c"
                 editor.text_area.tag_add("search_highlight", match_start, match_end)
                 editor.text_area.see(match_start)
                 editor.text_area.mark_set(tk.INSERT, match_start)
                 self.last_search_match_info = {'index': match_start, 'query': query}
+                self.status_bar.update_status(f"Wrapped around (previous). Found: '{query}'")
             else:
                 self.status_bar.update_status(f"'{query}' not found.")
                 self.last_search_match_info = {'index': editor.text_area.index(tk.INSERT), 'query': query}
-
+        else: # Initial search found something
+            self.status_bar.update_status(f"Found: '{query}'")
 
     def quit_application(self):
         # Iterate over a copy of tab IDs, as closing tabs will modify the notebook
