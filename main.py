@@ -1,143 +1,210 @@
 # Import the Tkinter library
 import tkinter as tk
-# Import the Text widget
-from tkinter import Text
-# Import filedialog for opening and saving files
-from tkinter import filedialog
-# Import Menu for creating menus
-from tkinter import Menu
+from tkinter import Text, filedialog, Menu, ttk
+import os
+import re
 
-# --- Global variables that might be accessed by functions ---
-# These are initialized here so they can be imported by tests,
-# but the actual Tk objects are created only if __name__ == "__main__"
-window = None
-text_area = None
-file_menu = None # Added for completeness, though not directly used in file ops tests
-menubar = None # Added for completeness
+# --- Syntax Highlighting Definitions ---
+SYNTAX_RULES = [
+    ("keyword", r"\b(def|class|if|elif|else|for|while|return|import|from|try|except|finally|with|as|True|False|None|and|or|not|is|in|lambda|global|nonlocal|yield|async|await|pass|break|continue)\b"),
+    ("comment", r"#.*"),
+    ("string", r"(\".*?\"|\'.*?\')"), # Basic strings, does not cover multi-line strings perfectly yet
+    ("multiline_string_double", r"\"\"\".*?\"\"\""),
+    ("multiline_string_single", r"\'\'\'.*?\'\'\'"),
+]
 
-# --- File Operation Functions ---
-# Define the function to open a file
-def open_file():
-    """Opens a file selected by the user and displays its content in the text area."""
-    global text_area, window # Ensure functions use the global (potentially mocked) instances
-    try:
-        # Ask the user to select a file
-        filepath = filedialog.askopenfilename(
-            filetypes=[
-                ("Text Files", "*.txt"),
-                ("Python Files", "*.py"),
-                ("Markdown Files", "*.md"),
-                ("All Files", "*.*")
-            ]
-        )
-        # If no file is selected, filepath will be empty, so do nothing
-        if not filepath:
-            return
+class TextEditor:
+    def __init__(self, master_frame, status_bar):
+        self.frame = master_frame
+        self.status_bar = status_bar
+        self.text_area = Text(self.frame)
+        self.text_area.pack(expand=True, fill='both', side='right')
+        self.text_area.focus_set()
+        self._configure_tags()
+        self.text_area.bind("<KeyRelease>", self.apply_syntax_highlighting)
+        # Could add scrollbars here if needed
+
+    def _configure_tags(self):
+        self.text_area.tag_configure("keyword", foreground="blue")
+        self.text_area.tag_configure("comment", foreground="green")
+        self.text_area.tag_configure("string", foreground="red")
+        self.text_area.tag_configure("multiline_string_double", foreground="red")
+        self.text_area.tag_configure("multiline_string_single", foreground="red")
+
+    def apply_syntax_highlighting(self, event=None):
+        content = self.get_content()
+        # Remove existing tags first
+        for tag, _ in SYNTAX_RULES:
+            self.text_area.tag_remove(tag, "1.0", tk.END)
         
-        # Open and read the file
-        with open(filepath, "r") as input_file:
-            text_content = input_file.read()
+        # Apply new tags
+        for tag, pattern in SYNTAX_RULES:
+            for match in re.finditer(pattern, content, re.MULTILINE if tag.startswith("multiline") else 0):
+                start_index = self.text_area.index(f"1.0 + {match.start()} chars")
+                end_index = self.text_area.index(f"1.0 + {match.end()} chars")
+                self.text_area.tag_add(tag, start_index, end_index)
+
+    def get_content(self):
+        return self.text_area.get("1.0", tk.END)
+
+    def set_content(self, text_content, apply_highlighting=True):
+        self.text_area.delete("1.0", tk.END)
+        self.text_area.insert("1.0", text_content)
+        if apply_highlighting:
+            self.apply_syntax_highlighting()
+
+    def clear_content(self):
+        self.text_area.delete("1.0", tk.END)
+
+class FileExplorer:
+    def __init__(self, master_frame, text_editor_instance, app_instance):
+        self.frame = master_frame
+        self.text_editor = text_editor_instance
+        self.app = app_instance # To call update_title_and_status
+
+        self.file_tree = ttk.Treeview(self.frame)
+        self.file_tree.pack(expand=True, fill='both')
+        self.file_tree["columns"] = ("path",)
+        self.file_tree.heading("#0", text="Name", anchor="w")
+        self.file_tree.column("#0", anchor="w")
+        self.file_tree.column("path", width=0, stretch=tk.NO) # Hide path column
+
+        self.populate_file_explorer(os.getcwd())
+        self.file_tree.bind("<<TreeviewSelect>>", self._on_file_select)
+
+    def populate_file_explorer(self, path):
+        # Clear existing items first
+        for i in self.file_tree.get_children():
+            self.file_tree.delete(i)
+        # Populate with new items
+        for item in os.listdir(path):
+            item_path = os.path.join(path, item)
+            self.file_tree.insert('', 'end', text=item, values=[item_path])
+            # TODO: Add recursion for directories
+
+    def _on_file_select(self, event=None):
+        selected_item = self.file_tree.selection()
+        if selected_item:
+            item_values = self.file_tree.item(selected_item, "values")
+            if item_values:
+                filepath = item_values[0]
+                if os.path.isfile(filepath):
+                    try:
+                        with open(filepath, "r") as input_file:
+                            text_content = input_file.read()
+                        self.text_editor.set_content(text_content)
+                        self.app.update_title_and_status(filepath)
+                    except Exception as e:
+                        print(f"Error opening file from explorer: {e}")
+                        self.app.status_bar.update_status(f"Error opening: {os.path.basename(filepath)}")
+
+
+class StatusBar:
+    def __init__(self, master_frame):
+        self.frame = master_frame
+        self.label = tk.Label(self.frame, text="Ready", anchor='w')
+        self.label.pack(fill=tk.X)
+
+    def update_status(self, message):
+        self.label.config(text=message)
+
+    def update_filepath(self, filepath):
+        if filepath:
+            self.label.config(text=f"File: {filepath}")
+        else:
+            self.label.config(text="Ready")
+
+
+class App:
+    def __init__(self):
+        self.window = tk.Tk()
+        self.window.title("Basic Text Editor - Refactored")
+
+        # --- Main Content Frame ---
+        # This frame will hold File Explorer (left) and TextEditor (right)
+        main_content_frame = tk.Frame(self.window)
+        main_content_frame.pack(expand=True, fill='both', side=tk.TOP) # Changed side
+
+        # --- Status Bar ---
+        # Status bar should be created before TextEditor if TextEditor needs it
+        status_bar_frame = tk.Frame(self.window, relief=tk.SUNKEN, bd=1)
+        status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_bar = StatusBar(status_bar_frame)
+
+        # --- File Explorer ---
+        # Takes a portion of the main_content_frame
+        file_explorer_frame = tk.Frame(main_content_frame, width=250) # Increased default width
+        file_explorer_frame.pack(side='left', fill='y', expand=False)
+        file_explorer_frame.pack_propagate(False)
+
+        # --- Text Editor ---
+        # Takes the remaining space in main_content_frame
+        text_editor_frame = tk.Frame(main_content_frame) # Parent is main_content_frame
+        text_editor_frame.pack(expand=True, fill='both', side='right')
+        self.text_editor = TextEditor(text_editor_frame, self.status_bar)
+        
+        # Now initialize FileExplorer, passing the App instance for callbacks
+        self.file_explorer = FileExplorer(file_explorer_frame, self.text_editor, self)
+
+
+        self._create_menu()
+
+    def _create_menu(self):
+        self.menubar = Menu(self.window)
+        self.window.config(menu=self.menubar)
+
+        file_menu = Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Open", command=self.open_file)
+        file_menu.add_command(label="Save", command=self.save_file)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.window.quit)
+
+    def open_file(self):
+        try:
+            filepath = filedialog.askopenfilename(
+                filetypes=[("Text Files", "*.txt"), ("Python Files", "*.py"), ("Markdown Files", "*.md"), ("All Files", "*.*")]
+            )
+            if not filepath:
+                return
             
-        # Clear the existing content in the text area
-        if text_area: # Check if text_area is initialized
-            text_area.delete("1.0", tk.END)
-        
-        # Insert the new content into the text area
-        if text_area: # Check if text_area is initialized
-            text_area.insert("1.0", text_content)
-        
-        # Optionally, update the window title to the name of the opened file
-        if window: # Check if window is initialized
-            window.title(f"Basic Text Editor - {filepath}")
-        
-    except FileNotFoundError:
-        print(f"Error: File not found at the specified path.")
-    except Exception as e:
-        print(f"An error occurred while opening the file: {e}")
+            with open(filepath, "r") as input_file:
+                text_content = input_file.read()
 
-# Define the function to save a file
-def save_file():
-    """Saves the current content of the text area to a file selected by the user."""
-    global text_area, window # Ensure functions use the global (potentially mocked) instances
-    try:
-        # Ask the user for a filepath to save to
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[
-                ("Text Files", "*.txt"),
-                ("Python Files", "*.py"),
-                ("Markdown Files", "*.md"),
-                ("All Files", "*.*")
-            ]
-        )
-        # If no file is selected (user cancels), filepath will be empty, so do nothing
-        if not filepath:
-            return
-        
-        # Get the content from the text area
-        text_content = ""
-        if text_area: # Check if text_area is initialized
-            text_content = text_area.get("1.0", tk.END)
-        
-        # Write the content to the selected file
-        with open(filepath, "w") as output_file:
-            output_file.write(text_content)
-            
-        # Optionally, update the window title to the name of the saved file
-        if window: # Check if window is initialized
-            window.title(f"Basic Text Editor - {filepath}")
-        
-    except Exception as e:
-        print(f"An error occurred while saving the file: {e}")
+            self.text_editor.set_content(text_content)
+            self.update_title_and_status(filepath)
+        except Exception as e:
+            print(f"An error occurred while opening the file: {e}")
+            self.status_bar.update_status(f"Error opening file: {os.path.basename(filepath)}")
 
-# --- Main Application Setup and Execution ---
-def main_app():
-    global window, text_area, file_menu, menubar # Declare globals to assign them
+    def save_file(self):
+        try:
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text Files", "*.txt"), ("Python Files", "*.py"), ("Markdown Files", "*.md"), ("All Files", "*.*")]
+            )
+            if not filepath:
+                return
 
-    # Create the main application window
-    window = tk.Tk()
+            text_content = self.text_editor.get_content()
+            with open(filepath, "w") as output_file:
+                output_file.write(text_content)
+            self.update_title_and_status(filepath)
+        except Exception as e:
+            print(f"An error occurred while saving the file: {e}")
+            self.status_bar.update_status("Error saving file.")
 
-    # Set the title of the window
-    window.title("Basic Text Editor")
+    def update_title_and_status(self, filepath=None):
+        if filepath:
+            self.window.title(f"Basic Text Editor - {filepath}")
+            self.status_bar.update_filepath(filepath)
+        else:
+            self.window.title("Basic Text Editor - Refactored")
+            self.status_bar.update_status("Ready")
 
-    # --- Menu Bar Setup ---
-    # Create the main menu bar
-    menubar = Menu(window)
-    # Configure the window to use this menu bar
-    window.config(menu=menubar)
-
-    # Create the "File" menu
-    file_menu = Menu(menubar, tearoff=0) # tearoff=0 removes the tear-off feature
-
-    # Add the "File" menu to the menu bar
-    menubar.add_cascade(label="File", menu=file_menu)
-
-    # --- Text Area Setup ---
-    # Create a Text widget
-    # The widget is parented to the main window
-    text_area = Text(window)
-
-    # Configure the Text widget to expand and fill the entire main window
-    # expand=True allows the widget to expand if the window is resized
-    # fill='both' makes the widget fill the space in both horizontal and vertical directions
-    text_area.pack(expand=True, fill='both')
-
-    # Ensure the text area is the main focus for text input when the application starts
-    text_area.focus_set()
-    
-    # --- Populate File Menu ---
-    # Add "Open" command
-    file_menu.add_command(label="Open", command=open_file)
-    # Add "Save" command
-    file_menu.add_command(label="Save", command=save_file)
-    # Add a separator line
-    file_menu.add_separator()
-    # Add "Exit" command
-    file_menu.add_command(label="Exit", command=window.quit)
-
-    # Start the Tkinter event loop
-    # This keeps the window open and responsive to user interactions
-    window.mainloop()
+    def run(self):
+        self.window.mainloop()
 
 if __name__ == "__main__":
-    main_app()
+    app = App()
+    app.run()
