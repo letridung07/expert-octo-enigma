@@ -143,7 +143,8 @@ class TestFileExplorer(unittest.TestCase):
         with patch.object(self.file_explorer, 'populate_file_explorer'
             ) as mock_populate:
             self.file_explorer._create_new_folder()
-        mock_mkdir.assert_called_once_with('/current/NewFolder')
+        mock_mkdir.assert_called_once_with(os.path.join('/current',
+            'NewFolder'))
         mock_populate.assert_called_once_with('/current')
         self.mock_app.status_bar.update_status.assert_called_with(
             "Folder 'NewFolder' created in /current.")
@@ -159,7 +160,8 @@ class TestFileExplorer(unittest.TestCase):
         with patch.object(self.file_explorer, 'populate_file_explorer'
             ) as mock_populate:
             self.file_explorer._create_new_file()
-        mock_file_open.assert_called_once_with('/current/new_file.txt', 'w')
+        mock_file_open.assert_called_once_with(os.path.join('/current',
+            'new_file.txt'), 'w')
         mock_populate.assert_called_once_with('/current')
         self.mock_app.status_bar.update_status.assert_called_with(
             "File 'new_file.txt' created in /current.")
@@ -176,10 +178,11 @@ class TestFileExplorer(unittest.TestCase):
         with patch.object(self.file_explorer, 'populate_file_explorer'
             ) as mock_populate:
             self.file_explorer._rename_item()
-        mock_rename.assert_called_once_with('/fake/old_name.txt',
-            '/fake/renamed_file.txt')
-        self.mock_app.handle_renamed_file.assert_called_once_with(
-            '/fake/old_name.txt', '/fake/renamed_file.txt')
+        mock_rename.assert_called_once_with(os.path.join('/fake',
+            'old_name.txt'), os.path.join('/fake', 'renamed_file.txt'))
+        self.mock_app.handle_renamed_file.assert_called_once_with(os.path.
+            join('/fake', 'old_name.txt'), os.path.join('/fake',
+            'renamed_file.txt'))
         mock_populate.assert_called_once()
         self.mock_app.status_bar.update_status.assert_called_with(
             "Renamed 'old_name.txt' to 'renamed_file.txt'.")
