@@ -173,7 +173,7 @@ class TestFileExplorer(unittest.TestCase):
         self.file_explorer.file_tree.selection = MagicMock(return_value=(
             'I001',))
         self.file_explorer.file_tree.item = MagicMock(return_value={
-            'values': ['/fake/old_name.txt', 'file']})
+            'values': [os.path.join('/fake', 'old_name.txt'), 'file']})
         self.file_explorer.current_path = '/fake'
         with patch.object(self.file_explorer, 'populate_file_explorer'
             ) as mock_populate:
