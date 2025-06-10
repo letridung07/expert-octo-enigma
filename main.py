@@ -211,12 +211,15 @@ class FileExplorer:
         # Using a minimal transparent GIF as placeholder if actual icons are not available
         # R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 (1x1 transparent GIF)
         b64_transparent_pixel = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+        # Ensure PhotoImage is associated with the correct Tkinter root/toplevel
+        # This is important in test environments or complex Tkinter setups.
+        master_for_images = self.frame.winfo_toplevel()
         try:
-            self.folder_icon = tk.PhotoImage(name="folder_icon_data", data=b64_transparent_pixel)
-            self.file_icon = tk.PhotoImage(name="file_icon_data", data=b64_transparent_pixel)
+            self.folder_icon = tk.PhotoImage(name="folder_icon_data", data=b64_transparent_pixel, master=master_for_images)
+            self.file_icon = tk.PhotoImage(name="file_icon_data", data=b64_transparent_pixel, master=master_for_images)
             # In a real scenario, replace b64_transparent_pixel with actual base64 encoded icon data
             # e.g., self.folder_icon = tk.PhotoImage(file="icons/folder.png")
-        except tk.TclError: # Fallback if PhotoImage fails (e.g., no display server like in some test environments)
+        except tk.TclError: # Fallback if PhotoImage fails
             self.folder_icon = None
             self.file_icon = None
             print("Warning: Could not load icons for File Explorer. Tkinter TclError.")
@@ -322,11 +325,14 @@ class FileExplorer:
                 messagebox.showerror("Error", f"Failed to delete item: {e}", parent=self.frame)
 
     def _on_file_select(self, event=None):
-        selected_item = self.file_tree.selection()
-        if selected_item:
-            item_values = self.file_tree.item(selected_item, "values")
-            if item_values:
-                filepath = item_values[0]
+        selected_items_tuple = self.file_tree.selection()
+        if selected_items_tuple:
+            selected_item_id = selected_items_tuple[0] # Get the actual item ID string
+            # Request the 'values' for this specific item ID
+            item_values_tuple = self.file_tree.item(selected_item_id, "values")
+            # Ensure item_values_tuple is a non-empty sequence before trying to access its elements
+            if item_values_tuple and len(item_values_tuple) > 0:
+                filepath = item_values_tuple[0] # filepath is the first value
                 if os.path.isfile(filepath):
                     # self.text_editor.set_content is no longer valid here.
                     # The App class (self.app) handles opening the file in a new tab.
@@ -499,21 +505,21 @@ class App:
             editor.text_area.see(match_start)
             editor.text_area.mark_set(tk.INSERT, match_end) # Move cursor to end of match
             self.last_search_match_info = {'index': match_end, 'query': query}
+            self.status_bar.update_status(f"Found: '{query}'") # Update status on successful find
         else: # Wrap around search
             self.status_bar.update_status(f"'{query}' not found. Wrapping around.")
-            match_start = editor.text_area.search(query, "1.0", stopindex=start_index, nocase=nocase_flag)
-            if match_start:
-                match_end = f"{match_start}+{len(query)}c"
-                editor.text_area.tag_add("search_highlight", match_start, match_end)
-                editor.text_area.see(match_start)
+            match_start_wrap = editor.text_area.search(query, "1.0", stopindex=start_index, nocase=nocase_flag)
+            if match_start_wrap:
+                match_end = f"{match_start_wrap}+{len(query)}c"
+                editor.text_area.tag_add("search_highlight", match_start_wrap, match_end)
+                editor.text_area.see(match_start_wrap)
                 editor.text_area.mark_set(tk.INSERT, match_end)
                 self.last_search_match_info = {'index': match_end, 'query': query}
                 self.status_bar.update_status(f"Wrapped around. Found: '{query}'")
             else:
                 self.status_bar.update_status(f"'{query}' not found.")
                 self.last_search_match_info = {'index': "1.0", 'query': query} # Reset for next time
-        else: # Initial search found something
-             self.status_bar.update_status(f"Found: '{query}'")
+        # The 'else' for initial search success was removed in a previous step; status update moved into the 'if match_start' block.
 
     def _find_previous(self, event=None): # Added event=None for binding
         editor = self.get_current_editor()
@@ -542,21 +548,21 @@ class App:
             editor.text_area.see(match_start)
             editor.text_area.mark_set(tk.INSERT, match_start) # Move cursor to start of match for prev
             self.last_search_match_info = {'index': match_start, 'query': query}
+            self.status_bar.update_status(f"Found: '{query}'") # Update status on successful find
         else: # Wrap around search (from end of doc to start_index)
             self.status_bar.update_status(f"'{query}' not found. Wrapping around (previous).")
-            match_start = editor.text_area.search(query, tk.END, stopindex=start_index, backwards=True, nocase=nocase_flag)
-            if match_start:
-                match_end = f"{match_start}+{len(query)}c"
-                editor.text_area.tag_add("search_highlight", match_start, match_end)
-                editor.text_area.see(match_start)
+            match_start_wrap = editor.text_area.search(query, tk.END, stopindex=start_index, backwards=True, nocase=nocase_flag)
+            if match_start_wrap:
+                match_end = f"{match_start_wrap}+{len(query)}c"
+                editor.text_area.tag_add("search_highlight", match_start_wrap, match_end)
+                editor.text_area.see(match_start_wrap)
                 editor.text_area.mark_set(tk.INSERT, match_start)
                 self.last_search_match_info = {'index': match_start, 'query': query}
                 self.status_bar.update_status(f"Wrapped around (previous). Found: '{query}'")
             else:
                 self.status_bar.update_status(f"'{query}' not found.")
                 self.last_search_match_info = {'index': editor.text_area.index(tk.INSERT), 'query': query}
-        else: # Initial search found something
-            self.status_bar.update_status(f"Found: '{query}'")
+        # The 'else' for initial search success was removed in a previous step; status update moved into the 'if match_start' block.
 
     def quit_application(self):
         # Iterate over a copy of tab IDs, as closing tabs will modify the notebook
