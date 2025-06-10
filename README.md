@@ -32,3 +32,9 @@ Refer to the overall project plan for a detailed outline of planned features. Th
 - File Explorer: Automatic refresh on external file system changes, customizable root directory.
 - More robust syntax highlighting for other languages.
 - Additional UI/UX refinements (e.g., themes, font settings, drag-and-drop tabs).
+
+## Python 3.13 Compatibility
+This application has been tested with Python 3.13.
+- All unit tests pass with Python 3.13.4.
+- The application launches and basic functionality has been verified.
+- A minor adjustment to the test suite (`test_editor.py`) was made to ensure compatibility with mock objects under Python 3.13's testing environment when Tkinter components are patched.
