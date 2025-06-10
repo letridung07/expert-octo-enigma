@@ -8,9 +8,17 @@ A Python-based application aiming to replicate core features of Visual Studio Co
 - File open/save
 - Syntax highlighting for Python
 - Tabbed Editor Interface: Allows multiple files to be open in different tabs. Includes prompts to save unsaved changes.
-- Enhanced File Explorer: Right-click context menu with "New File", "New Folder", "Rename", and "Delete" operations.
-- Basic Search Functionality: Users can search for text within the current file using a dedicated search bar (Find Next/Previous, case-insensitive).
+- Enhanced File Explorer:
+    - Right-click context menu with "New File", "New Folder", "Rename", and "Delete" operations.
+    - Recursive directory expansion (view contents of subfolders).
+    - Manual refresh option.
+- Search Functionality:
+    - Basic text search (Find Next/Previous).
+    - Case-sensitive search option.
 - Status Bar: Displays current file path and other messages.
+- UI/UX Refinements:
+    - Placeholder icons for files/folders in the File Explorer.
+    - Informative status bar messages for search and file operations.
 
 ## Planned Features
 
@@ -20,7 +28,7 @@ Refer to the overall project plan for a detailed outline of planned features. Th
 - Debugging tools
 - Version control integration
 - Extensibility through plugins
-- Advanced search options (e.g., regex, case sensitivity)
-- File Explorer: Recursive directory expansion and refresh on external changes.
+- Advanced Search Options: Regular expression (regex) search.
+- File Explorer: Automatic refresh on external file system changes, customizable root directory.
 - More robust syntax highlighting for other languages.
-- UI/UX refinements.
+- Additional UI/UX refinements (e.g., themes, font settings, drag-and-drop tabs).

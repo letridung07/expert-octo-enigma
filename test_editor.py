@@ -139,6 +139,8 @@ class TestFileExplorer(unittest.TestCase):
             self.file_explorer._create_new_folder()
         mock_mkdir.assert_called_once_with("/current/NewFolder")
         mock_populate.assert_called_once_with("/current")
+        self.mock_app.status_bar.update_status.assert_called_with("Folder 'NewFolder' created in /current.")
+
 
     @patch('main.simpledialog.askstring')
     @patch('builtins.open', new_callable=mock_open)
@@ -151,32 +153,169 @@ class TestFileExplorer(unittest.TestCase):
             self.file_explorer._create_new_file()
         mock_file_open.assert_called_once_with("/current/new_file.txt", 'w')
         mock_populate.assert_called_once_with("/current")
+        self.mock_app.status_bar.update_status.assert_called_with("File 'new_file.txt' created in /current.")
+
 
     @patch('main.simpledialog.askstring')
     @patch('os.rename')
     def test_rename_item_file_open_in_app(self, mock_rename, mock_askstring):
         mock_askstring.return_value = "renamed_file.txt"
         self.file_explorer.file_tree.selection = MagicMock(return_value=("I001",))
-        self.file_explorer.file_tree.item = MagicMock(return_value={"values": ["/fake/old_name.txt"]})
+        self.file_explorer.file_tree.item = MagicMock(return_value={"values": ["/fake/old_name.txt", "file"]}) # Added type
         self.file_explorer.current_path = "/fake" # Needed for populate
         with patch.object(self.file_explorer, 'populate_file_explorer') as mock_populate:
             self.file_explorer._rename_item()
         mock_rename.assert_called_once_with("/fake/old_name.txt", "/fake/renamed_file.txt")
         self.mock_app.handle_renamed_file.assert_called_once_with("/fake/old_name.txt", "/fake/renamed_file.txt")
         mock_populate.assert_called_once()
+        self.mock_app.status_bar.update_status.assert_called_with("Renamed 'old_name.txt' to 'renamed_file.txt'.")
+
 
     @patch('main.messagebox.askyesno', return_value=True)
     @patch('os.remove')
     @patch('os.path.isfile', return_value=True) # Assume it's a file
     def test_delete_item_file_open_in_app(self, mock_isfile, mock_os_remove, mock_askyesno):
         self.file_explorer.file_tree.selection = MagicMock(return_value=("I001",))
-        self.file_explorer.file_tree.item = MagicMock(return_value={"values": ["/fake/file_to_delete.txt"]})
+        self.file_explorer.file_tree.item = MagicMock(return_value={"values": ["/fake/file_to_delete.txt", "file"]}) # Added type
         self.file_explorer.current_path = "/fake"
         with patch.object(self.file_explorer, 'populate_file_explorer') as mock_populate:
             self.file_explorer._delete_item()
         mock_os_remove.assert_called_once_with("/fake/file_to_delete.txt")
         self.mock_app.handle_deleted_file.assert_called_once_with("/fake/file_to_delete.txt")
         mock_populate.assert_called_once()
+        self.mock_app.status_bar.update_status.assert_called_with("Deleted 'file_to_delete.txt'.")
+
+
+    @patch('os.listdir')
+    @patch('os.path.isdir')
+    def test_populate_recursive_on_treeview_open(self, mock_isdir, mock_listdir):
+        # Setup initial tree with a directory and placeholder
+        dir_id = "item_dir"
+        dir_path = "/fake/testdir"
+        placeholder_id = "item_placeholder"
+
+        # Simulate initial population:
+        # populate_file_explorer(self, parent_node_id, dir_path)
+        # We need to mock tree.insert to control IDs
+        def initial_insert_side_effect(parent, index, text, values, open, image=None):
+            if text == "testdir": return dir_id
+            if text == "...": return placeholder_id
+            return MagicMock() # Default for other calls
+
+        self.file_explorer.file_tree.insert = MagicMock(side_effect=initial_insert_side_effect)
+        mock_isdir.return_value = True # testdir is a directory
+        mock_listdir.return_value = ["subfile.txt"] # Content of testdir for later expansion
+
+        # Initial call to populate root (not tested here, assume it adds 'testdir')
+        # For this test, let's assume 'testdir' is already there with a placeholder
+        self.file_explorer.file_tree.item = MagicMock(side_effect=lambda node_id: {
+            dir_id: {'values': [dir_path, 'directory']},
+            placeholder_id: {'values': ['placeholder', 'placeholder']}
+        }.get(node_id))
+        self.file_explorer.file_tree.get_children = MagicMock(return_value=[placeholder_id])
+        self.file_explorer.file_tree.focus = MagicMock(return_value=dir_id)
+        self.file_explorer.file_tree.delete = MagicMock()
+
+        # Patch the recursive call to populate_file_explorer
+        with patch.object(self.file_explorer, 'populate_file_explorer') as mock_recursive_populate:
+            self.file_explorer._on_treeview_open(None) # Simulate event
+
+        mock_recursive_populate.assert_called_once_with(dir_id, dir_path)
+        self.file_explorer.file_tree.delete.assert_called_once_with(placeholder_id)
+
+    def test_refresh_explorer(self):
+        self.file_explorer.file_tree.get_children = MagicMock(return_value=["id1", "id2"])
+        self.file_explorer.file_tree.delete = MagicMock()
+        with patch.object(self.file_explorer, 'populate_file_explorer') as mock_populate:
+            self.file_explorer._refresh_explorer()
+
+        self.file_explorer.file_tree.delete.assert_has_calls([call("id1"), call("id2")], any_order=True)
+        mock_populate.assert_called_once_with("", self.file_explorer.current_path)
+
+    @patch('os.listdir', return_value=['folder1'])
+    @patch('os.path.isdir', return_value=True) # Everything is a folder for this test
+    @patch('main.FileExplorer._load_icons', MagicMock()) # Prevent icon loading issues in test
+    def test_populate_adds_placeholder_for_directory(self, mock_isdir, mock_listdir):
+        self.file_explorer.file_tree.insert = MagicMock(return_value="folder_id") # Main item ID
+
+        # Reset current_path for predictability
+        self.file_explorer.current_path = "/testroot"
+        # Call for root
+        self.file_explorer.populate_file_explorer("", self.file_explorer.current_path)
+
+        # Check insert for the directory itself
+        # Check insert for the placeholder (child of the directory)
+        # expected_item_call = call("", 'end', text='folder1', values=['/testroot/folder1', 'directory'], open=False, image=ANY)
+        # expected_placeholder_call = call("folder_id", 'end', text='...', values=['placeholder', 'placeholder'])
+
+        # Simplified check due to complex image mocking: Check if insert was called more than once (item + placeholder)
+        # A more robust way would be to check call_args_list
+        self.assertGreaterEqual(self.file_explorer.file_tree.insert.call_count, 2)
+        args_list = self.file_explorer.file_tree.insert.call_args_list
+        # First call is for the directory itself
+        self.assertEqual(args_list[0][1]['text'], 'folder1')
+        self.assertEqual(args_list[0][1]['values'][1], 'directory')
+        # Second call is for its placeholder
+        self.assertEqual(args_list[1][1]['text'], '...')
+        self.assertEqual(args_list[1][1]['values'][0], 'placeholder')
+        self.assertEqual(args_list[1][0][0], "folder_id") # Parent is the folder_id
+
+    @patch('os.listdir', side_effect=PermissionError("Test permission denied"))
+    @patch('main.FileExplorer._load_icons', MagicMock())
+    def test_populate_handles_permission_error(self, mock_listdir):
+        self.file_explorer.file_tree.insert = MagicMock()
+        self.file_explorer.current_path = "/unreadable_dir"
+        self.file_explorer.populate_file_explorer("", self.file_explorer.current_path)
+
+        # Expect an error node to be inserted at the root
+        self.file_explorer.file_tree.insert.assert_called_once_with(
+            "", 'end', text="[Error: unreadable_dir]", values=["/unreadable_dir", "error"]
+        )
+
+    @patch('tkinter.PhotoImage') # Mock PhotoImage to avoid actual image processing
+    @patch('os.path.isdir') # Mock isdir for item type determination
+    @patch('os.listdir', return_value=['file.txt', 'folder']) # Mock listdir
+    def test_populate_assigns_icons(self, mock_listdir, mock_isdir, mock_photoimage):
+        # Setup mock_isdir to return True for 'folder' and False for 'file.txt'
+        def isdir_side_effect(path):
+            # Using endswith as a simple way to differentiate for the test
+            if path.endswith('folder'): return True
+            if path.endswith('file.txt'): return False
+            return False # Default for other paths like /fake_path itself
+        mock_isdir.side_effect = isdir_side_effect
+
+        # We need a FileExplorer instance where _load_icons has been called
+        # and where self.folder_icon and self.file_icon are set to our mocks
+
+        # Temporarily patch _load_icons on the class to do nothing during instantiation for this test
+        with patch.object(FileExplorer, '_load_icons', lambda x: None):
+            fe_for_icon_test = FileExplorer(self.file_explorer_frame, self.mock_app, self.mock_app)
+
+        # Manually assign mocked PhotoImage instances AFTER _load_icons is bypassed or controlled
+        mock_folder_icon_instance = MagicMock(spec=tk.PhotoImage)
+        mock_file_icon_instance = MagicMock(spec=tk.PhotoImage)
+        fe_for_icon_test.folder_icon = mock_folder_icon_instance
+        fe_for_icon_test.file_icon = mock_file_icon_instance
+
+        fe_for_icon_test.file_tree.insert = MagicMock()
+        fe_for_icon_test.populate_file_explorer("", "/fake_path") # Path doesn't matter much due to mocks
+
+        calls = fe_for_icon_test.file_tree.insert.call_args_list
+        self.assertTrue(len(calls) >= 2, "Should have tried to insert at least two items")
+
+        found_file_call = False
+        found_folder_call = False
+        for call_args_entry in calls:
+            kwargs = call_args_entry[1] # a dict of keyword arguments
+            if kwargs['text'] == 'file.txt':
+                self.assertEqual(kwargs['image'], mock_file_icon_instance)
+                found_file_call = True
+            elif kwargs['text'] == 'folder':
+                self.assertEqual(kwargs['image'], mock_folder_icon_instance)
+                found_folder_call = True
+
+        self.assertTrue(found_file_call, "File item with icon not inserted correctly")
+        self.assertTrue(found_folder_call, "Folder item with icon not inserted correctly")
 
 
 class TestApp(unittest.TestCase):
@@ -370,6 +509,65 @@ class TestApp(unittest.TestCase):
         mock_editor.text_area.search.assert_any_call("wrap", "1.0", stopindex="5.0", nocase=True)
         mock_editor.text_area.tag_add.assert_called_once_with("search_highlight", "1.2", "1.2+4c")
         self.app.status_bar.update_status.assert_any_call("'wrap' not found. Wrapping around.")
+
+    def test_find_next_case_sensitive_match(self):
+        mock_editor = MagicMock(spec=TextEditor)
+        mock_editor.text_area = MagicMock()
+        mock_editor.text_area.search.return_value = "1.0" # Found
+        self.app.search_entry.get.return_value = "Test"
+        self.app.case_sensitive_var.set(True) # Enable case-sensitive
+
+        with patch.object(self.app, 'get_current_editor', return_value=mock_editor):
+            self.app._find_next()
+
+        # Check that nocase=False was used in the search call
+        args, kwargs = mock_editor.text_area.search.call_args
+        self.assertFalse(kwargs.get('nocase', True), "Search should have been case-sensitive (nocase=False)")
+        mock_editor.text_area.tag_add.assert_called_once()
+        self.app.status_bar.update_status.assert_called_with("Found: 'Test'")
+
+
+    def test_find_next_case_insensitive_match_via_option(self):
+        mock_editor = MagicMock(spec=TextEditor)
+        mock_editor.text_area = MagicMock()
+        mock_editor.text_area.search.return_value = "1.0" # Found
+        self.app.search_entry.get.return_value = "test"
+        self.app.case_sensitive_var.set(False) # Disable case-sensitive (explicitly)
+
+        with patch.object(self.app, 'get_current_editor', return_value=mock_editor):
+            self.app._find_next()
+
+        args, kwargs = mock_editor.text_area.search.call_args
+        self.assertTrue(kwargs.get('nocase', False), "Search should have been case-insensitive (nocase=True)")
+        self.app.status_bar.update_status.assert_called_with("Found: 'test'")
+
+
+    def test_find_previous_case_sensitive_match(self):
+        mock_editor = MagicMock(spec=TextEditor)
+        mock_editor.text_area = MagicMock()
+        mock_editor.text_area.search.return_value = "1.0" # Found
+        self.app.search_entry.get.return_value = "Test"
+        self.app.case_sensitive_var.set(True)
+
+        with patch.object(self.app, 'get_current_editor', return_value=mock_editor):
+            self.app._find_previous()
+
+        args, kwargs = mock_editor.text_area.search.call_args
+        self.assertFalse(kwargs.get('nocase', True), "Search should have been case-sensitive (nocase=False)")
+        self.assertTrue(kwargs.get('backwards'), "Search should have been backwards")
+        self.app.status_bar.update_status.assert_called_with("Found: 'Test'")
+
+    def test_on_search_option_changed_clears_last_match(self):
+        mock_editor = MagicMock(spec=TextEditor)
+        mock_editor.clear_search_highlights = MagicMock()
+        self.app.last_search_match_info = {'index': "5.5", 'query': "old_query"}
+        self.app.search_entry.get.return_value = "new_query" # Simulate query might also change
+
+        with patch.object(self.app, 'get_current_editor', return_value=mock_editor):
+            self.app._on_search_option_changed()
+
+        self.assertEqual(self.app.last_search_match_info, {'index': "1.0", 'query': "new_query"})
+        mock_editor.clear_search_highlights.assert_called_once()
 
 
 if __name__ == '__main__':
